@@ -1,0 +1,116 @@
+/* Embed Link Converter — preview dialog and settings notes. */
+
+.elc-summary {
+  margin: 0 0 0.35em;
+  font-weight: var(--font-semibold);
+}
+
+.elc-muted {
+  margin: 0 0 0.35em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.elc-warning {
+  margin: 0.6em 0;
+  padding: 0.55em 0.7em;
+  border-radius: var(--radius-s);
+  border-left: 3px solid var(--text-warning);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-small);
+}
+
+.elc-files {
+  max-height: min(52vh, 520px);
+  overflow-y: auto;
+  margin: 0.8em 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: 0.3em;
+}
+
+.elc-file {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.elc-file:last-child {
+  border-bottom: none;
+}
+
+.elc-file > summary {
+  cursor: pointer;
+  padding: 0.35em 0.4em;
+  border-radius: var(--radius-s);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+}
+
+.elc-file > summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.elc-path {
+  flex: 1 1 auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.elc-count {
+  flex: 0 0 auto;
+  min-width: 1.6em;
+  text-align: center;
+  padding: 0 0.4em;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.elc-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45em;
+  padding: 0.25em 0.4em 0.25em 1.4em;
+  font-size: var(--font-ui-smaller);
+}
+
+.elc-change code {
+  font-family: var(--font-monospace);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-s);
+  overflow-wrap: anywhere;
+}
+
+.elc-before {
+  background: var(--background-modifier-error-hover);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-error);
+  color: var(--text-muted);
+}
+
+.elc-after {
+  background: var(--background-modifier-success-hover);
+}
+
+.elc-arrow {
+  color: var(--text-faint);
+}
+
+.elc-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5em;
+  margin-top: 0.4em;
+}
+
+.elc-buttons button {
+  cursor: pointer;
+}
+
+/* The scope/size explanations rendered under their dropdowns. */
+.setting-item-description[style*="margin-top"] {
+  padding: 0 0 0.5em 0;
+}
