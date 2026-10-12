@@ -1,9 +1,9 @@
 {
   "id": "embed-link-converter",
   "name": "Embed Link Converter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.5.0",
-  "description": "Convert Obsidian wiki-link embeds to Markdown image syntax and back. Scope the run to a folder for a pilot, or leave it empty for the whole vault. Preview every change before it is written, with automatic timestamped backups.",
+  "description": "Convert wiki-link embeds to Markdown image syntax and back. Scope the run to a folder for a pilot, or leave it empty for the whole vault. Preview every change before it is written, with automatic timestamped backups.",
   "author": "rosswang",
   "authorUrl": "https://github.com/yanqingwang",
   "isDesktopOnly": false
