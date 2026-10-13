@@ -1,8 +1,24 @@
 import type { Plugin } from "obsidian";
 import type { ConvertOptions, EmbedScope, SizeStrategy } from "./converter";
 
-/** Folder in the vault config this plugin owns. Backups and nothing else are written here. */
-export const PLUGIN_DIR = ".obsidian/plugins/embed-link-converter";
+/** Plugin id; the folder name Obsidian derives from it under the vault's config directory. */
+export const PLUGIN_ID = "embed-link-converter";
+
+/**
+ * Folder backups live in, relative to the vault's config directory.
+ *
+ * The `.obsidian` name is *not* hard-coded anywhere: a user can point Obsidian at a different
+ * config folder, and a hard-coded path would silently write backups somewhere the vault never sees.
+ * `Vault#configDir` is the supported way to ask.
+ */
+export function backupsDir(configDir: string): string {
+  return `${configDir}/plugins/${PLUGIN_ID}/backups`;
+}
+
+/** Where the user will find their backups, for display in the preview. */
+export function backupsHint(configDir: string): string {
+  return `${configDir}/plugins/${PLUGIN_ID}/backups/`;
+}
 
 export interface EmbedConverterSettings {
   /**

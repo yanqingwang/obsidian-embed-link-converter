@@ -10,7 +10,7 @@ import {
   convertOptionsOf,
   DEFAULT_SETTINGS,
   normalizeScopeFolder,
-  PLUGIN_DIR,
+  backupsHint,
   type ConverterHost,
   type EmbedConverterSettings,
 } from "./settings";
@@ -155,6 +155,7 @@ export default class EmbedLinkConverterPlugin extends Plugin implements Converte
         plan,
         backupEnabled: this.settings.backupEnabled,
         retentionDays: this.settings.backupRetentionDays,
+        backupDir: backupsHint(this.app.vault.configDir),
         noteEmbeds,
       }, proceed).open();
     } else {
@@ -191,7 +192,7 @@ export default class EmbedLinkConverterPlugin extends Plugin implements Converte
 
     if (this.settings.backupEnabled) {
       try {
-        const backup = await createBackup(this.app.vault.adapter, paths);
+        const backup = await createBackup(this.app.vault.adapter, paths, this.app.vault.configDir);
         backupDir = backup.dir;
       } catch (error) {
         // Refusing to continue is the only safe response: the write below is destructive.
@@ -231,22 +232,21 @@ export default class EmbedLinkConverterPlugin extends Plugin implements Converte
       console.error(`[embed-link-converter] ${failures.length} file(s) failed:\n${failures.join("\n")}`);
       notice.setMessage(`${parts.join(" · ")} · ${failures.length} 个文件失败（详见开发者控制台）`);
     }
-    console.log(`[embed-link-converter] ${direction}: wrote ${written}/${plan.files.length} files`, { backupDir, failures });
+    // Only failures are logged. A success line on every run is noise the user has to scroll past,
+    // and the plugin review flags routine logging for exactly that reason. Details the user might
+    // want go in the Notice, which is what they can actually see.
   }
 
   private async pruneBackupsQuietly(): Promise<void> {
     try {
-      const removed = await pruneBackups(this.app.vault.adapter, this.settings.backupRetentionDays);
-      if (removed.length > 0) {
-        console.log(`[embed-link-converter] pruned ${removed.length} expired backup(s) from ${PLUGIN_DIR}/backups`);
-      }
+      await pruneBackups(this.app.vault.adapter, this.settings.backupRetentionDays, this.app.vault.configDir);
     } catch (error) {
       console.warn("[embed-link-converter] backup pruning failed", error);
     }
   }
 
   async rollbackLastRun(): Promise<void> {
-    const latest = await findLatestBackup(this.app.vault.adapter);
+    const latest = await findLatestBackup(this.app.vault.adapter, this.app.vault.configDir);
     if (!latest) {
       new Notice("Embed Link Converter：没有找到任何备份。");
       return;

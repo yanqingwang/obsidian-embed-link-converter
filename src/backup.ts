@@ -1,5 +1,5 @@
 import { TFile, type DataAdapter, type Vault } from "obsidian";
-import { PLUGIN_DIR } from "./settings";
+import { backupsDir } from "./settings";
 
 /**
  * Timestamped, self-pruning backups.
@@ -13,7 +13,7 @@ import { PLUGIN_DIR } from "./settings";
  * stored pointer.
  */
 
-export const BACKUP_ROOT = `${PLUGIN_DIR}/backups`;
+
 
 const TIMESTAMP_NAME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
 const DAY_MS = 86_400_000;
@@ -23,8 +23,8 @@ export function timestampName(date: Date): string {
   return date.toISOString().replace(/[:.]/g, "-");
 }
 
-export function backupDir(name: string): string {
-  return `${BACKUP_ROOT}/${name}`;
+export function backupDir(configDir: string, name: string): string {
+  return `${backupsDir(configDir)}/${name}`;
 }
 
 /** Epoch millis for a backup folder name, or `null` when the name is not one of ours. */
@@ -55,9 +55,10 @@ export interface BackupOutcome {
 export async function createBackup(
   adapter: DataAdapter,
   paths: string[],
+  configDir: string,
   now: Date = new Date()
 ): Promise<BackupOutcome> {
-  const dir = backupDir(timestampName(now));
+  const dir = backupDir(configDir, timestampName(now));
   await adapter.mkdir(dir);
   for (const path of paths) {
     const data = await adapter.readBinary(path);
@@ -72,35 +73,42 @@ export async function createBackup(
 export async function pruneBackups(
   adapter: DataAdapter,
   keepDays: number,
+  configDir: string,
   now: number = Date.now()
 ): Promise<string[]> {
   if (keepDays <= 0) return [];
-  if (!(await adapter.exists(BACKUP_ROOT))) return [];
+  const root = backupsDir(configDir);
+  if (!(await adapter.exists(root))) return [];
 
-  const listing = await adapter.list(BACKUP_ROOT);
+  const listing = await adapter.list(root);
   const removed: string[] = [];
 
   for (const name of listing.folders) {
     const timestamp = parseTimestampName(name);
     if (timestamp === null || !isExpired(timestamp, keepDays, now)) continue;
-    await adapter.remove(backupDir(name));
+    await adapter.remove(backupDir(configDir, name));
     removed.push(name);
   }
   return removed;
 }
 
 /** Newest backup folder name, or `null` when there are none. */
-export async function findLatestBackup(adapter: DataAdapter): Promise<string | null> {
-  if (!(await adapter.exists(BACKUP_ROOT))) return null;
-  const listing = await adapter.list(BACKUP_ROOT);
+export async function findLatestBackup(adapter: DataAdapter, configDir: string): Promise<string | null> {
+  const root = backupsDir(configDir);
+  if (!(await adapter.exists(root))) return null;
+  const listing = await adapter.list(root);
   const names = listing.folders.filter((name) => parseTimestampName(name) !== null);
   if (names.length === 0) return null;
   return names.sort().pop() as string;
 }
 
 /** Every file inside a backup folder, as vault-relative paths. */
-export async function listBackupFiles(adapter: DataAdapter, name: string): Promise<string[]> {
-  const root = backupDir(name);
+export async function listBackupFiles(
+  adapter: DataAdapter,
+  configDir: string,
+  name: string
+): Promise<string[]> {
+  const root = backupDir(configDir, name);
   const out: string[] = [];
 
   const walk = async (current: string): Promise<void> => {
@@ -122,8 +130,9 @@ export async function listBackupFiles(adapter: DataAdapter, name: string): Promi
  */
 export async function restoreBackup(vault: Vault, name: string): Promise<string[]> {
   const adapter = vault.adapter;
-  const root = backupDir(name);
-  const paths = await listBackupFiles(adapter, name);
+  const configDir = vault.configDir;
+  const root = backupDir(configDir, name);
+  const paths = await listBackupFiles(adapter, configDir, name);
   const restored: string[] = [];
 
   for (const path of paths) {

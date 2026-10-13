@@ -135,7 +135,7 @@ OUTDIR="/path/to/your/vault/.obsidian/plugins/embed-link-converter" npm run buil
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # 198 个测试
+npm test            # 216 个测试
 npm run dev         # 监听重建
 ```
 
@@ -168,11 +168,18 @@ tests/
 ├── scope.test.ts            # 范围解析，含错误路径
 ├── planner.test.ts          # 计划生成
 ├── backup.test.ts           # 时间戳、过期、回滚、路径安全
-├── settings.test.ts
+├── settings.test.ts         # 备份目录由 configDir 推导
+├── settingsTab.test.ts      # 声明式设置（1.13+ 设置搜索）
 └── e2e-filesystem.test.ts   # 真实目录、真实文件名、真实落盘往返
 ```
 
 `roundtrip.test.ts` 是这个插件的核心承诺：每一种受支持的语法，转过去再转回来必须逐字节一致。`e2e-filesystem.test.ts` 在真实文件系统上验证同一件事，用的是中文路径、空格、括号、CRLF。
+
+### 两处容易被忽略的地方
+
+**设置页有两套渲染，但只有一份定义。** `getSettingDefinitions()`（Obsidian 1.13.0+）和 `display()`（1.13 之前的全部版本）都读同一个 `spec()`，因为它们描述的是同一批设置，写两遍迟早会漂移。少实现前者不会报错——设置只是搜不到，所以 `settingsTab.test.ts` 断言每个持久化字段都出现在声明式定义里。
+
+**备份目录跟着 `Vault#configDir` 走。** `.obsidian` 这个名字是可以被用户改掉的；硬编码会把备份写到 vault 根本不看的地方，而回滚按钮只会安静地报告「没有找到任何备份」。绝对路径和相对路径两种形态都有测试。
 
 ---
 

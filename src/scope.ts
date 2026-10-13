@@ -59,9 +59,14 @@ export function collectScope(vault: Vault, rawFolder: string, includeSubfolders:
     return { files: [target], description: `1 note (${target.path})` };
   }
 
-  const root = target as TFolder;
+  // `instanceof` rather than a cast: a cast would let a `TFile` through and then fail on
+  // `.children` at runtime, long after the mistake was made.
+  if (!(target instanceof TFolder)) {
+    return { files: [], description: folder, error: `"${folder}" is not a folder.` };
+  }
+
   const files: TFile[] = [];
-  for (const child of root.children) {
+  for (const child of target.children) {
     if (child instanceof TFile && isMarkdown(child) && !isHiddenPath(child.path)) {
       files.push(child);
     } else if (includeSubfolders && child instanceof TFolder && !isHiddenPath(child.path)) {

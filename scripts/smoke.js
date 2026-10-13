@@ -83,10 +83,33 @@ Module._load = function (request, parent, isMain) {
     problems.push("defaults not loaded");
   }
 
+  // The declarative settings API has to survive bundling. Unit tests import the TypeScript source;
+  // this is the only check that runs against the artefact users actually load. Without it, nothing
+  // in the tab appears in Obsidian's settings search on 1.13.0+.
+  const settingsTab = plugin.settingTabs[0];
+  let searchable = 0;
+  if (typeof settingsTab.getSettingDefinitions !== "function") {
+    problems.push("settings tab does not implement getSettingDefinitions()");
+  } else {
+    const keys = settingsTab
+      .getSettingDefinitions()
+      .flatMap((group) => group.items ?? [])
+      .map((item) => item.control?.key)
+      .filter(Boolean);
+    searchable = keys.length;
+    if (searchable !== Object.keys(plugin.settings).length) {
+      problems.push(`${searchable} searchable settings but ${Object.keys(plugin.settings).length} stored`);
+    }
+    // The stub base class has no such method, so this only passes if the override really shipped.
+    if (settingsTab.getControlValue("scope") === undefined) {
+      problems.push("getControlValue() did not resolve a stored setting");
+    }
+  }
+
   // A run with an empty scope must be a clean no-op, not a throw.
   await plugin.runConversion("wiki-to-md");
 
-  console.log(JSON.stringify({ commands: ids, ribbon: plugin.ribbons.length, settingsTab: plugin.settingTabs.length, problems }, null, 2));
+  console.log(JSON.stringify({ commands: ids, ribbon: plugin.ribbons.length, settingsTab: plugin.settingTabs.length, searchableSettings: searchable, problems }, null, 2));
   process.exit(problems.length ? 1 : 0);
 })().catch((e) => {
   console.error("SMOKE LOAD FAILED:", e);

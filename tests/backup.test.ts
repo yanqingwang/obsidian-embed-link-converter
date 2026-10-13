@@ -1,5 +1,4 @@
 import {
-  BACKUP_ROOT,
   backupDir,
   createBackup,
   findLatestBackup,
@@ -10,7 +9,16 @@ import {
   restoreBackup,
   timestampName,
 } from "../src/backup";
+import { backupsDir } from "../src/settings";
 import { TFile } from "obsidian";
+
+/**
+ * The plugin no longer assumes the config folder is called `.obsidian` — a user can point Obsidian
+ * anywhere — so every path in these tests is derived from a `Vault#configDir` value, exactly as
+ * production does.
+ */
+const CONFIG_DIR = "/srv/notes/.obsidian";
+const BACKUP_ROOT = backupsDir(CONFIG_DIR);
 
 /** In-memory stand-in for Obsidian's vault adapter. */
 class FakeAdapter {
@@ -25,10 +33,14 @@ class FakeAdapter {
 
   async mkdir(path: string): Promise<void> {
     this.mkdirCalls.push(path);
+    // A real adapter keeps the path it was handed, leading slash included. Dropping it here made
+    // `list()` unable to find folders whenever `Vault#configDir` was absolute -- which it usually
+    // is -- and the mismatch stayed invisible while the plugin hard-coded a relative `.obsidian`.
+    const absolute = path.startsWith("/");
     let current = "";
     for (const part of path.split("/").filter(Boolean)) {
       current = current ? `${current}/${part}` : part;
-      this.folders.add(current);
+      this.folders.add(absolute ? `/${current}` : current);
     }
   }
 
@@ -117,10 +129,10 @@ describe("creating and restoring a backup", () => {
     await seed(adapter);
     const when = new Date("2026-10-12T00:00:00.000Z");
 
-    const outcome = await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], when);
+    const outcome = await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], CONFIG_DIR, when);
 
     expect(outcome.files).toBe(2);
-    expect(outcome.dir).toBe(backupDir(timestampName(when)));
+    expect(outcome.dir).toBe(backupDir(CONFIG_DIR, timestampName(when)));
     expect(adapter.files.get(`${outcome.dir}/notes/a.md`)).toBe("![[x.png]]");
     expect(adapter.files.get(`${outcome.dir}/notes/deep/b.md`)).toBe("![[y.png]]");
   });
@@ -128,7 +140,7 @@ describe("creating and restoring a backup", () => {
   it("leaves the originals in place", async () => {
     const adapter = new FakeAdapter();
     await seed(adapter);
-    await createBackup(adapter as any, ["notes/a.md"]);
+    await createBackup(adapter as any, ["notes/a.md"], CONFIG_DIR);
     expect(adapter.files.get("notes/a.md")).toBe("![[x.png]]");
   });
 
@@ -136,8 +148,8 @@ describe("creating and restoring a backup", () => {
     const adapter = new FakeAdapter();
     await seed(adapter);
     const when = new Date("2026-10-12T00:00:00.000Z");
-    await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], when);
-    expect(await listBackupFiles(adapter as any, timestampName(when))).toEqual([
+    await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], CONFIG_DIR, when);
+    expect(await listBackupFiles(adapter as any, CONFIG_DIR, timestampName(when))).toEqual([
       "notes/a.md",
       "notes/deep/b.md",
     ]);
@@ -148,7 +160,7 @@ describe("creating and restoring a backup", () => {
     await seed(adapter);
     const when = new Date("2026-10-12T00:00:00.000Z");
     const name = timestampName(when);
-    await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], when);
+    await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], CONFIG_DIR, when);
 
     // Simulate the conversion having run.
     adapter.files.set("notes/a.md", "![](x.png)");
@@ -157,6 +169,7 @@ describe("creating and restoring a backup", () => {
     const modified = new Map<string, string>();
     const vault = {
       adapter: adapter as any,
+      configDir: CONFIG_DIR,
       getAbstractFileByPath: (p: string) => (adapter.files.has(p) ? new TFile(p) : null),
       modify: async (file: TFile, data: string) => {
         modified.set(file.path, data);
@@ -173,7 +186,7 @@ describe("creating and restoring a backup", () => {
 
   it("fails loudly when a source file has vanished", async () => {
     const adapter = new FakeAdapter();
-    await expect(createBackup(adapter as any, ["gone.md"])).rejects.toThrow(/ENOENT/);
+    await expect(createBackup(adapter as any, ["gone.md"], CONFIG_DIR)).rejects.toThrow(/ENOENT/);
   });
 });
 
@@ -182,7 +195,7 @@ describe("pruning", () => {
 
   const seedAges = async (adapter: FakeAdapter) => {
     for (const iso of ["2026-10-01T00:00:00.000Z", "2026-10-10T00:00:00.000Z", "2026-10-11T00:00:00.000Z"]) {
-      await adapter.mkdir(backupDir(name(iso)));
+      await adapter.mkdir(backupDir(CONFIG_DIR, name(iso)));
     }
     // A folder the plugin did not create must survive untouched.
     await adapter.mkdir(`${BACKUP_ROOT}/my-own-notes`);
@@ -193,29 +206,29 @@ describe("pruning", () => {
     await seedAges(adapter);
     const now = new Date("2026-10-12T00:00:00.000Z").getTime();
 
-    const removed = await pruneBackups(adapter as any, 7, now);
+    const removed = await pruneBackups(adapter as any, 7, CONFIG_DIR, now);
 
     expect(removed).toEqual([name("2026-10-01T00:00:00.000Z")]);
-    expect(adapter.removed).toEqual([backupDir(name("2026-10-01T00:00:00.000Z"))]);
-    expect(await adapter.exists(backupDir(name("2026-10-10T00:00:00.000Z")))).toBe(true);
+    expect(adapter.removed).toEqual([backupDir(CONFIG_DIR, name("2026-10-01T00:00:00.000Z"))]);
+    expect(await adapter.exists(backupDir(CONFIG_DIR, name("2026-10-10T00:00:00.000Z")))).toBe(true);
   });
 
   it("never deletes a folder it cannot identify", async () => {
     const adapter = new FakeAdapter();
     await seedAges(adapter);
-    await pruneBackups(adapter as any, 1, new Date("2026-10-12T00:00:00.000Z").getTime());
+    await pruneBackups(adapter as any, 1, CONFIG_DIR, new Date("2026-10-12T00:00:00.000Z").getTime());
     expect(await adapter.exists(`${BACKUP_ROOT}/my-own-notes`)).toBe(true);
   });
 
   it("does nothing when retention is zero", async () => {
     const adapter = new FakeAdapter();
     await seedAges(adapter);
-    expect(await pruneBackups(adapter as any, 0)).toEqual([]);
+    expect(await pruneBackups(adapter as any, 0, CONFIG_DIR)).toEqual([]);
     expect(adapter.removed).toEqual([]);
   });
 
   it("does nothing when there are no backups at all", async () => {
-    expect(await pruneBackups(new FakeAdapter() as any, 7)).toEqual([]);
+    expect(await pruneBackups(new FakeAdapter() as any, 7, CONFIG_DIR)).toEqual([]);
   });
 });
 
@@ -223,26 +236,52 @@ describe("finding the latest backup", () => {
   it("picks the newest by name", async () => {
     const adapter = new FakeAdapter();
     for (const iso of ["2026-10-10T00:00:00.000Z", "2026-10-12T00:00:00.000Z", "2026-10-11T00:00:00.000Z"]) {
-      await adapter.mkdir(backupDir(timestampName(new Date(iso))));
+      await adapter.mkdir(backupDir(CONFIG_DIR, timestampName(new Date(iso))));
     }
-    expect(await findLatestBackup(adapter as any)).toBe("2026-10-12T00-00-00-000Z");
+    expect(await findLatestBackup(adapter as any, CONFIG_DIR)).toBe("2026-10-12T00-00-00-000Z");
   });
 
   it("returns null when there is nothing to roll back", async () => {
-    expect(await findLatestBackup(new FakeAdapter() as any)).toBeNull();
+    expect(await findLatestBackup(new FakeAdapter() as any, CONFIG_DIR)).toBeNull();
   });
 
   it("ignores folders that are not backups", async () => {
     const adapter = new FakeAdapter();
     await adapter.mkdir(`${BACKUP_ROOT}/scratch`);
-    expect(await findLatestBackup(adapter as any)).toBeNull();
+    expect(await findLatestBackup(adapter as any, CONFIG_DIR)).toBeNull();
   });
 });
 
 describe("path safety", () => {
   it("keeps backups inside the plugin folder", () => {
-    expect(BACKUP_ROOT).toBe(".obsidian/plugins/embed-link-converter/backups");
-    expect(backupDir("x")).toBe(`${BACKUP_ROOT}/x`);
+    expect(BACKUP_ROOT).toBe(`${CONFIG_DIR}/plugins/embed-link-converter/backups`);
+    expect(backupDir(CONFIG_DIR, "x")).toBe(`${BACKUP_ROOT}/x`);
+  });
+
+  it("follows the config folder the vault reports instead of assuming `.obsidian`", () => {
+    // A hard-coded `.obsidian` would write backups where this vault never looks, and the user would
+    // only find out when the rollback button silently found nothing.
+    const moved = "/Library/Mobile Documents/iCloud~md~obsidian/Documents/config";
+    expect(backupsDir(moved)).toBe(`${moved}/plugins/embed-link-converter/backups`);
+    expect(backupsDir(moved)).not.toContain(".obsidian");
+  });
+
+  it("works whether the config folder is reported absolute or relative", async () => {
+    // Obsidian reports an absolute path on desktop and a vault-relative one on mobile, so both
+    // shapes have to round-trip through create -> list -> restore.
+    for (const configDir of ["/srv/notes/.obsidian", ".obsidian"]) {
+      const adapter = new FakeAdapter();
+      adapter.files.set("notes/a.md", "![[x.png]]");
+      adapter.files.set("notes/deep/b.md", "![[y.png]]");
+      const when = new Date("2026-10-12T00:00:00.000Z");
+      const name = timestampName(when);
+
+      await createBackup(adapter as any, ["notes/a.md", "notes/deep/b.md"], configDir, when);
+      expect(await listBackupFiles(adapter as any, configDir, name)).toEqual([
+        "notes/a.md",
+        "notes/deep/b.md",
+      ]);
+    }
   });
 
   it("does not let a traversal in a vault path escape the backup folder", () => {

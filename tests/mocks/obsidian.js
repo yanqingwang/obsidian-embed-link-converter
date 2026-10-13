@@ -28,4 +28,102 @@ class TFolder extends TAbstractFile {
   }
 }
 
-module.exports = { TFile, TFolder, TAbstractFile };
+/** Records what the plugin told the user, so tests can assert a Notice actually appeared. */
+const notices = [];
+
+class Notice {
+  constructor(message) {
+    this.message = message;
+    notices.push(message);
+  }
+  setMessage(message) {
+    this.message = message;
+    notices[notices.length - 1] = message;
+  }
+}
+
+/**
+ * Chainable no-op. Enough for `display()` to run without a DOM, which is what the settings tab
+ * does on every version before 1.13.
+ */
+class Setting {
+  constructor(containerEl) {
+    this.containerEl = containerEl;
+  }
+  setName() {
+    return this;
+  }
+  setDesc() {
+    return this;
+  }
+  setHeading() {
+    return this;
+  }
+  setButtonText() {
+    return this;
+  }
+  setWarning() {
+    return this;
+  }
+  setPlaceholder() {
+    return this;
+  }
+  addButton(fn) {
+    fn(this._child());
+    return this;
+  }
+  addText(fn) {
+    fn(this._child());
+    return this;
+  }
+  addToggle(fn) {
+    fn(this._child());
+    return this;
+  }
+  addDropdown(fn) {
+    fn(this._child());
+    return this;
+  }
+  _child() {
+    return {
+      setName: () => {},
+      setDesc: () => {},
+      setPlaceholder: () => {},
+      setValue: () => {},
+      setButtonText: () => {},
+      setWarning: () => {},
+      addOption: () => {},
+      onChange: () => {},
+      onClick: () => {},
+    };
+  }
+}
+
+class FuzzySuggestModal {
+  constructor(app) {
+    this.app = app;
+  }
+  setPlaceholder() {}
+  open() {
+    return this;
+  }
+}
+
+class PluginSettingTab {
+  constructor(app, plugin) {
+    this.app = app;
+    this.plugin = plugin;
+    this.containerEl = { empty() {}, createEl: () => ({}) };
+  }
+}
+
+module.exports = {
+  TFile,
+  TFolder,
+  TAbstractFile,
+  Notice,
+  Setting,
+  FuzzySuggestModal,
+  PluginSettingTab,
+  notices,
+};

@@ -11,6 +11,8 @@ import type { Plan } from "./planner";
  */
 
 export interface PreviewRequest {
+  /** Absolute path backups are written to, from `Vault#configDir`. */
+  readonly backupDir: string;
   readonly direction: Direction;
   readonly scopeDescription: string;
   readonly plan: Plan;
@@ -75,10 +77,8 @@ export class PreviewModal extends Modal {
         cls: "elc-muted",
         text:
           days > 0
-            ? `Originals will be copied to .obsidian/plugins/embed-link-converter/backups/. Backups older than ${days} day${
-                days === 1 ? "" : "s"
-              } are deleted automatically.`
-            : "Originals will be copied to .obsidian/plugins/embed-link-converter/backups/ and kept indefinitely.",
+            ? `原文件会复制到 ${this.request.backupDir}/。超过 ${days} 天的备份会自动删除。`
+            : `原文件会复制到 ${this.request.backupDir}/，永久保留。`,
       });
     } else {
       contentEl.createEl("p", {

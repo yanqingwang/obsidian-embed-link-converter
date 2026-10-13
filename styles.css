@@ -111,6 +111,7 @@
 }
 
 /* The scope/size explanations rendered under their dropdowns. */
-.setting-item-description[style*="margin-top"] {
-  padding: 0 0 0.5em 0;
+.elc-explain {
+  margin: -0.4em 0 0.8em 0;
+  padding: 0;
 }

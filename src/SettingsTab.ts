@@ -1,6 +1,16 @@
-import { FuzzySuggestModal, PluginSettingTab, Setting, TFolder, type App } from "obsidian";
+import {
+  FuzzySuggestModal,
+  Notice,
+  PluginSettingTab,
+  Setting,
+  TFolder,
+  type App,
+  type ExtraButtonComponent,
+  type SettingDefinitionItem,
+  type SettingGroupItem,
+} from "obsidian";
 import type { ConverterHost, EmbedConverterSettings } from "./settings";
-import { normalizeScopeFolder } from "./settings";
+import { DEFAULT_SETTINGS, normalizeScopeFolder } from "./settings";
 
 /** Folder picker. Typing stays available; this is a shortcut, not a replacement. */
 class FolderSuggest extends FuzzySuggestModal<string> {
@@ -32,13 +42,16 @@ class FolderSuggest extends FuzzySuggestModal<string> {
   }
 }
 
-const SCOPE_OPTIONS: Record<EmbedConverterSettings["scope"], [string, string]> = {
+/** Dropdown value -> [label, explanation]. */
+type OptionTable = Record<string, [string, string]>;
+
+const SCOPE_OPTIONS: OptionTable = {
   "image-only": ["仅图片", "只处理 png/jpg/gif/svg 等图片。这是默认值，也是唯一不改变渲染结果的范围。"],
   "image-and-attachments": ["图片 + 附件", "同时处理 PDF、音视频、canvas、压缩包等，但不动笔记。"],
   all: ["全部（含笔记转嵌）", "连 ![[Some Note]] 也转成普通链接 —— 这会改变笔记的渲染结果。"],
 };
 
-const SIZE_OPTIONS: Record<EmbedConverterSettings["size"], [string, string]> = {
+const SIZE_OPTIONS: OptionTable = {
   html: [
     "HTML <img> 标签",
     '![[a.png|300]] → <img src="a.png" width="300">，通用 Markdown 渲染器都能显示，可逆。',
@@ -50,141 +63,345 @@ const SIZE_OPTIONS: Record<EmbedConverterSettings["size"], [string, string]> = {
   ],
 };
 
-/** Explanatory line rendered under a dropdown. */
-function describe(containerEl: HTMLElement, text: string): void {
-  const p = containerEl.createEl("p", { cls: "setting-item-description", text });
-  p.style.margin = "-0.4em 0 0.8em 0";
+type SettingKey = keyof EmbedConverterSettings;
+
+interface RowSpec {
+  /** Absent on action rows, which run something instead of storing something. */
+  key?: SettingKey;
+  name: string;
+  /** A function is re-read on every render, which is how dropdowns show their current explanation. */
+  desc?: string | (() => string);
+  control?: {
+    type: "text" | "toggle" | "dropdown" | "number";
+    placeholder?: string;
+    min?: number;
+    options?: OptionTable;
+  };
+  action?: { text: string; warning?: boolean; run: () => Promise<unknown> | unknown };
+  /**
+   * Row-level buttons. Only the pre-1.13 imperative path can draw these; the declarative path
+   * hoists them onto the group header, which is the nearest equivalent it offers.
+   */
+  buttons?: Array<{ text: string; warning?: boolean; run: () => Promise<unknown> | unknown }>;
 }
+
+interface GroupSpec {
+  heading: string;
+  items: RowSpec[];
+}
+
+/**
+ * Wrap a callback body so it does not return a promise.
+ *
+ * Obsidian's `onChange` / `onClick` declare `=> void`, so handing them an `async` arrow passes a
+ * promise nobody awaits: if the save rejects, it surfaces as an unhandled rejection rather than
+ * anything the user can act on. This keeps the body async but the arrow synchronous, and turns a
+ * rejected save into a Notice.
+ */
+function fire<A extends unknown[]>(body: (...args: A) => Promise<unknown> | unknown): (...args: A) => void {
+  return (...args: A) => {
+    void Promise.resolve(body(...args)).catch((error: unknown) => {
+      new Notice(`Embed Link Converter：操作失败 —— ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+}
+
+/**
+ * Values the control's own type cannot constrain, checked before anything is persisted.
+ *
+ * Returning a non-empty string rejects the change and Obsidian renders it inline, which is why the
+ * old behaviour of silently dropping an unparseable number is not repeated here.
+ */
+const VALIDATORS: Partial<Record<SettingKey, (value: unknown) => string | void>> = {
+  backupRetentionDays: (value) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0
+      ? undefined
+      : "请输入 0 或更大的天数（0 = 永久保留）",
+};
 
 export class EmbedConverterSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly host: ConverterHost) {
     super(app, host);
   }
 
+  /* ---------------------------------------------------------------- *
+   * Declarative settings (Obsidian 1.13.0+)
+   *
+   * Without these, nothing here appears in Obsidian's settings *search* on 1.13 and later.
+   *
+   * `spec()` is the single source of truth: `getSettingDefinitions()` and `display()` both read it,
+   * so the two renderings cannot drift into disagreeing about what settings exist.
+   * ---------------------------------------------------------------- */
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return this.spec().map((group) => ({
+      type: "group" as const,
+      heading: group.heading,
+      extraButtons: this.headerButtons(group),
+      items: group.items.map((row) => (row.action ? this.actionItem(row) : this.controlItem(row))),
+    }));
+  }
+
+  /** The declarative path owns persistence; these two are how it reads and writes. */
+  getControlValue(key: string): unknown {
+    const settings = this.host.settings as unknown as Record<string, unknown>;
+    return key in settings ? settings[key] : (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key];
+  }
+
+  setControlValue(key: string, value: unknown): void {
+    const settings = this.host.settings as unknown as Record<string, unknown>;
+    settings[key] = key === "scopeFolder" && typeof value === "string" ? normalizeScopeFolder(value) : value;
+    void this.host.saveSettings();
+  }
+
+  /**
+   * The pre-1.13 renderer. Still required — `display()` is abstract — and still what every version
+   * before 1.13 uses.
+   */
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    const settings = this.host.settings;
 
-    new Setting(containerEl).setName("转换范围").setHeading();
+    for (const group of this.spec()) {
+      new Setting(containerEl).setName(group.heading).setHeading();
 
-    new Setting(containerEl)
-      .setName("文件夹")
-      .setDesc("留空 = 整个 vault。建议先在一个子文件夹里试点，确认结果后再清空这一栏。")
-      .addText((text) =>
-        text
-          .setPlaceholder("例如：AITasks/embed-pilot（留空则全库）")
-          .setValue(this.host.settings.scopeFolder)
-          .onChange(async (value) => {
-            this.host.settings.scopeFolder = normalizeScopeFolder(value);
-            await this.host.saveSettings();
-          })
-      )
-      .addButton((button) =>
-        button.setButtonText("浏览…").onClick(() => {
-          new FolderSuggest(this.app, async (folder) => {
-            this.host.settings.scopeFolder = folder;
-            await this.host.saveSettings();
-            this.display();
-          }).open();
-        })
-      )
-      .addButton((button) =>
-        button
-          .setButtonText("清空")
-          .setWarning()
-          .onClick(async () => {
-            this.host.settings.scopeFolder = "";
-            await this.host.saveSettings();
-            this.display();
-          })
-      );
+      for (const row of group.items) {
+        const setting = new Setting(containerEl).setName(row.name);
+        const desc = resolve(row.desc);
+        if (desc) setting.setDesc(desc);
 
-    new Setting(containerEl)
-      .setName("包含子文件夹")
-      .setDesc("指定了文件夹时，是否连同它的子文件夹一起处理。")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.includeSubfolders).onChange(async (value) => {
-          this.host.settings.includeSubfolders = value;
-          await this.host.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("处理哪些嵌入")
-      .setDesc("除图片以外的嵌入（PDF、Canvas、音视频、笔记转嵌）是否参与转换。")
-      .addDropdown((dropdown) => {
-        for (const [value, [label]] of Object.entries(SCOPE_OPTIONS)) {
-          dropdown.addOption(value, label);
+        if (row.action) {
+          setting.addButton((button) => {
+            button.setButtonText(row.action!.text);
+            if (row.action!.warning) button.setWarning();
+            button.onClick(fire(row.action!.run));
+          });
+          continue;
         }
-        dropdown.setValue(this.host.settings.scope).onChange(async (value) => {
-          this.host.settings.scope = value as EmbedConverterSettings["scope"];
-          await this.host.saveSettings();
-          this.display();
-        });
-      });
-    describe(containerEl, SCOPE_OPTIONS[this.host.settings.scope][1]);
 
-    new Setting(containerEl).setName("转换选项").setHeading();
-
-    new Setting(containerEl)
-      .setName("尺寸参数如何处理")
-      .setDesc("双链的图片尺寸写法在标准 Markdown 里没有对应语法，必须决定去留。")
-      .addDropdown((dropdown) => {
-        for (const [value, [label]] of Object.entries(SIZE_OPTIONS)) {
-          dropdown.addOption(value, label);
+        const control = row.control!;
+        const key = row.key!;
+        switch (control.type) {
+          case "text":
+            setting.addText((text) => {
+              text.setPlaceholder(control.placeholder ?? "");
+              text.setValue(String(settings[key] ?? ""));
+              text.onChange(fire((value: string) => this.write(key, value)));
+            });
+            break;
+          case "toggle":
+            setting.addToggle((toggle) => {
+              toggle.setValue(Boolean(settings[key])).onChange(fire((value: boolean) => this.write(key, value)));
+            });
+            break;
+          case "dropdown":
+            setting.addDropdown((dropdown) => {
+              for (const [value, [label]] of Object.entries(control.options!)) dropdown.addOption(value, label);
+              dropdown.setValue(String(settings[key])).onChange(fire((value: string) => this.write(key, value, true)));
+            });
+            break;
+          case "number":
+            setting.addText((text) => {
+              text.setPlaceholder(control.placeholder ?? String(DEFAULT_SETTINGS[key]));
+              text.setValue(String(settings[key]));
+              text.onChange(
+                fire((value: string) => {
+                  const parsed = Number.parseInt(value, 10);
+                  if (VALIDATORS[key]?.(parsed)) return;
+                  this.write(key, parsed);
+                })
+              );
+            });
+            break;
         }
-        dropdown.setValue(this.host.settings.size).onChange(async (value) => {
-          this.host.settings.size = value as EmbedConverterSettings["size"];
-          await this.host.saveSettings();
-          this.display();
-        });
-      });
-    describe(containerEl, SIZE_OPTIONS[this.host.settings.size][1]);
 
-    new Setting(containerEl).setName("安全").setHeading();
-
-    new Setting(containerEl)
-      .setName("写入前先预览")
-      .setDesc("先列出将改动的每个文件和具体前后差异，确认后才写入。建议保持开启。")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.previewBeforeWrite).onChange(async (value) => {
-          this.host.settings.previewBeforeWrite = value;
-          await this.host.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("自动备份")
-      .setDesc("把即将改动的文件原样复制到插件目录下的时间戳备份文件夹。")
-      .addToggle((toggle) =>
-        toggle.setValue(this.host.settings.backupEnabled).onChange(async (value) => {
-          this.host.settings.backupEnabled = value;
-          await this.host.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("备份保留天数")
-      .setDesc("超过这个天数的备份会在每次转换后自动删除。设为 0 表示永久保留。")
-      .addText((text) =>
-        text
-          .setPlaceholder("7")
-          .setValue(String(this.host.settings.backupRetentionDays))
-          .onChange(async (value) => {
-            const parsed = Number.parseInt(value, 10);
-            if (Number.isNaN(parsed) || parsed < 0) return;
-            this.host.settings.backupRetentionDays = parsed;
-            await this.host.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("回滚上一次转换")
-      .setDesc("用最近一次备份覆盖当前文件，把这些笔记恢复到那次转换之前的状态。")
-      .addButton((button) =>
-        button.setButtonText("回滚").onClick(async () => {
-          await this.host.rollbackLastRun();
-        })
-      );
+        for (const button of row.buttons ?? []) {
+          setting.addButton((b) => {
+            b.setButtonText(button.text);
+            if (button.warning) b.setWarning();
+            b.onClick(fire(button.run));
+          });
+        }
+      }
+    }
   }
+
+  /* ---------------------------------------------------------------- *
+   * Internals
+   * ---------------------------------------------------------------- */
+
+  private spec(): GroupSpec[] {
+    return [
+      {
+        heading: "转换范围",
+        items: [
+          {
+            key: "scopeFolder",
+            name: "文件夹",
+            desc: "留空 = 整个 vault。建议先在一个子文件夹里试点，确认结果后再清空这一栏。",
+            control: { type: "text", placeholder: "例如：AITasks/embed-pilot（留空则全库）" },
+            buttons: [
+              { text: "浏览…", run: () => this.browseForFolder() },
+              { text: "清空", warning: true, run: () => this.clearScopeFolder() },
+            ],
+          },
+          {
+            key: "includeSubfolders",
+            name: "包含子文件夹",
+            desc: "指定了文件夹时，是否连同它的子文件夹一起处理。",
+            control: { type: "toggle" },
+          },
+          {
+            key: "scope",
+            name: "处理哪些嵌入",
+            desc: () => SCOPE_OPTIONS[this.host.settings.scope][1],
+            control: { type: "dropdown", options: SCOPE_OPTIONS },
+          },
+        ],
+      },
+      {
+        heading: "转换选项",
+        items: [
+          {
+            key: "size",
+            name: "尺寸参数如何处理",
+            desc: () => SIZE_OPTIONS[this.host.settings.size][1],
+            control: { type: "dropdown", options: SIZE_OPTIONS },
+          },
+        ],
+      },
+      {
+        heading: "安全",
+        items: [
+          {
+            key: "previewBeforeWrite",
+            name: "写入前先预览",
+            desc: "先列出将改动的每个文件和具体前后差异，确认后才写入。建议保持开启。",
+            control: { type: "toggle" },
+          },
+          {
+            key: "backupEnabled",
+            name: "自动备份",
+            desc: "把即将改动的文件原样复制到插件目录下的时间戳备份文件夹。",
+            control: { type: "toggle" },
+          },
+          {
+            key: "backupRetentionDays",
+            name: "备份保留天数",
+            desc: "超过这个天数的备份会在每次转换后自动删除。设为 0 表示永久保留。",
+            control: { type: "number", min: 0, placeholder: "7" },
+          },
+          {
+            name: "回滚上一次转换",
+            desc: "用最近一次备份覆盖当前文件，把这些笔记恢复到那次转换之前的状态。",
+            action: { text: "回滚", run: () => this.host.rollbackLastRun() },
+          },
+        ],
+      },
+    ];
+  }
+
+  private async write(key: SettingKey, value: unknown, redraw = false): Promise<void> {
+    (this.host.settings as unknown as Record<string, unknown>)[key] =
+      key === "scopeFolder" && typeof value === "string" ? normalizeScopeFolder(value) : value;
+    await this.host.saveSettings();
+    // Only the two dropdowns change what else is on screen, and only via their explanation line.
+    if (redraw) this.display();
+  }
+
+  private async browseForFolder(): Promise<void> {
+    new FolderSuggest(this.app, (folder) => {
+      void fire(async () => {
+        await this.write("scopeFolder", folder);
+        this.display();
+      })();
+    }).open();
+  }
+
+  private async clearScopeFolder(): Promise<void> {
+    await this.write("scopeFolder", "");
+    this.display();
+  }
+
+  private actionItem(row: RowSpec): SettingGroupItem {
+    return {
+      name: row.name,
+      desc: resolve(row.desc),
+      action: () => {
+        fire(row.action!.run)();
+      },
+    };
+  }
+
+  private controlItem(row: RowSpec): SettingGroupItem {
+    const control = row.control!;
+    const key = row.key!;
+    const base = { name: row.name, desc: resolve(row.desc) };
+    const check = VALIDATORS[key];
+    // A function accepting the widest value type is assignable to every control's narrower
+    // signature, so one adapter covers text / toggle / dropdown / number alike.
+    const validate = check ? (value: string | boolean | number) => check(value) : undefined;
+
+    switch (control.type) {
+      case "text":
+        return {
+          ...base,
+          control: {
+            type: "text",
+            key,
+            defaultValue: DEFAULT_SETTINGS[key] as string,
+            placeholder: control.placeholder,
+            validate,
+          },
+        };
+      case "toggle":
+        return {
+          ...base,
+          control: { type: "toggle", key, defaultValue: DEFAULT_SETTINGS[key] as boolean },
+        };
+      case "dropdown": {
+        const options: Record<string, string> = {};
+        for (const [value, [label]] of Object.entries(control.options!)) options[value] = label;
+        return {
+          ...base,
+          control: { type: "dropdown", key, defaultValue: DEFAULT_SETTINGS[key] as string, options },
+        };
+      }
+      case "number":
+        return {
+          ...base,
+          control: {
+            type: "number",
+            key,
+            defaultValue: DEFAULT_SETTINGS[key] as number,
+            min: control.min,
+            placeholder: control.placeholder,
+            validate,
+          },
+        };
+    }
+  }
+
+  /**
+   * Row buttons, hoisted to the group header for the declarative path.
+   *
+   * `SettingDefinitionControl` explicitly forbids a per-item `render`/`action` alongside a control,
+   * and `extraButtons` is the only per-row affordance it exposes. One group here has buttons, so
+   * the result is identical in practice.
+   */
+  private headerButtons(group: GroupSpec) {
+    const buttons = group.items.flatMap((row) => row.buttons ?? []);
+    if (buttons.length === 0) return undefined;
+    return buttons.map(
+      (button) => (component: ExtraButtonComponent) => {
+        component.setIcon("folder-search").setTooltip(button.text);
+        component.onClick(fire(button.run));
+      }
+    );
+  }
+}
+
+function resolve(desc: string | (() => string) | undefined): string | undefined {
+  return typeof desc === "function" ? desc() : desc;
 }
